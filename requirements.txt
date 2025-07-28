@@ -5,4 +5,4 @@ matplotlib
 requests
 scikit-learn
 python-dotenv
-supabase-py
+supabase
