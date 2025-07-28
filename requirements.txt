@@ -1,1 +1,1 @@
--e "streamlit\npandas\nnumpy\nmatplotlib\nrequests\nscikit-learn" 
+-e "streamlit\npandas\nnumpy\nmatplotlib\nrequests\nscikit-learn\dotenv\supabase"

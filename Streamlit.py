@@ -40,8 +40,8 @@ def pagina_login():
         usuario = autenticar_usuario(login, senha)
         if usuario:
             st.session_state["usuario"] = usuario
+            st.success("Login com Sucesso! Redirecionando...")
             st.session_state.page = "home"
-
         else:
             st.error("Login ou senha incorretos.")
 
@@ -69,38 +69,43 @@ with st.sidebar:
         if st.button(label, key=key):
             st.session_state.page = key
     if st.button("Sair"):
+        st.error("Deslogando")
         del st.session_state["usuario"]
 
 
 # ———————————————————————————— FUNÇÕES
 
-@st.cache_data(ttl=360000)
-def forecast_trend(df, days_ahead=30):
+@st.cache_data(ttl=3600)
+def forecast_trend(df: pd.DataFrame, days_ahead: int = 30):
+    # Converte datas para ordinais
     df2 = df.copy()
     df2["ts"] = df2["date"].map(datetime.datetime.toordinal)
     X = df2["ts"].values.reshape(-1, 1)
     y = df2["close"].values
+    # Ajusta modelo linear
     model = LinearRegression().fit(X, y)
-    last = df2["date"].max()
-    future = [last + datetime.timedelta(days=i) for i in range(1, days_ahead + 1)]
-    Xf = np.array([d.toordinal() for d in future]).reshape(-1, 1)
+    # Gera datas futuras
+    last_date = df2["date"].max()
+    future_dates = [last_date + datetime.timedelta(days=i) for i in range(1, days_ahead + 1)]
+    Xf = np.array([d.toordinal() for d in future_dates]).reshape(-1, 1)
     yf = model.predict(Xf)
-    return pd.DataFrame({"date": future, "close": yf})
+    return pd.DataFrame({"date": future_dates, "close": yf})
 
 
 @st.cache_data(ttl=36000)
-def fetch_history_brapi(ticker, range_code):
+def fetch_history_brapi(ticker: str, range_code: str):
     url = f"https://brapi.dev/api/quote/{ticker}"
     params = {"range": range_code, "interval": "1d", "token": BRAPI_KEY}
-    r = requests.get(url, params=params, timeout=10)
-    r.raise_for_status()
-    data = r.json().get("results") or []
+    resp = requests.get(url, params=params, timeout=10)
+    resp.raise_for_status()
+    data = resp.json().get("results") or []
     if not data:
         return None
-    hist = data[0].get("historicalDataPrice") or []
+    hist = data[0].get("historicalDataPrice")
     if not hist:
         return None
     df = pd.DataFrame(hist)
+    # histórico vem com timestamp em segundos
     df["date"] = pd.to_datetime(df["date"], unit="s")
     return df[["date", "close"]]
 
@@ -129,71 +134,119 @@ def page_home():
     selic = fetch_bcb_rate(11)
     cdi = fetch_bcb_rate(12)
     st.markdown("### Indicadores atuais")
-    st.write(f"**SELIC:** {selic:.4f}%") if selic else st.write("**SELIC:** indisponível")
-    st.write(f"**CDI:** {cdi:.4f}%") if cdi else st.write("**CDI:** indisponível")
-    st.markdown("---")
-    st.markdown("#### Desenvolvido por Igor")
+    st.write(f"**SELIC (diária):** {selic:.4f}%" if selic else "**SELIC:** indisponível")
+    st.write(f"**CDI (diária):** {cdi:.4f}%" if cdi else "**CDI:** indisponível")
+    st.write("-------------------------------------------------------------------------------")
+    st.markdown("#### Desenvolvido pelo Elon Musk da Petrobras. Igor Zuckerberg")
 
 def page_buscar_ativo():
-    st.title("Buscar Ação + Projeção")
-    t = st.text_input("Ticker:", "").upper().strip().replace(".SA", "")
-    p = st.selectbox("Período:", ["1 mês", "3 meses"])
-    cmap = {"1 mês": "1mo", "3 meses": "3mo"}
+    st.title("Buscar Ação + Projeção (brapi.dev)")
+    ticker = st.text_input("Ticker (ex: PETR4):", "").upper().strip().replace(".SA", "")
+    period = st.selectbox("Período:", ["1 mês","3 meses"])
+    code_map = {"1 mês":"1mo","3 meses":"3mo"}
     if st.button("Buscar e projetar"):
-        if not t:
+        if not ticker:
             st.error("Digite um ticker.")
             return
-        df = fetch_history_brapi(t, cmap[p])
+        df = fetch_history_brapi(ticker, code_map[period])
         if df is None or df.empty:
             st.error("Não foi possível obter dados.")
             return
-        df2 = forecast_trend(df)
+
+        df = df.sort_values("date")
+        df_future = forecast_trend(df, days_ahead=30)
+
+        # Plot histórico + projeção
+        st.subheader("Histórico e Projeção (próximos 30 dias)")
         fig, ax = plt.subplots()
-        ax.plot(df["date"], df["close"], ".-", label="Histórico")
-        ax.plot(df2["date"], df2["close"], "--", label="Projeção")
+        ax.plot(df["date"], df["close"], label="Histórico", marker=".", linewidth=1)
+        ax.plot(df_future["date"], df_future["close"], label="Projeção", linestyle="--")
+        ax.set_xlabel("Data")
+        ax.set_ylabel("Preço (R$)")
         ax.legend()
         plt.xticks(rotation=45)
         plt.tight_layout()
         st.pyplot(fig)
 
 def page_calculadora():
-    st.title("Calculadora")
-    PV = st.number_input("Inv. inicial:", 1000.0)
-    A = st.number_input("Aporte:", 100.0)
-    n = st.number_input("Meses:", 1, 12)
+    st.title("Calculadora de Investimentos")
+
+    PV = st.number_input("Investimento inicial (R$):", value=1000.0)
+    A = st.number_input("Aporte mensal (R$):", value=100.0)
+    n = st.number_input("Meses:", min_value=1, value=12)
+
+    # Busca taxas de referência
     selic = fetch_bcb_rate(11)
     cdi = fetch_bcb_rate(12)
-    cdi_anual = ((1 + cdi / 100) ** 252 - 1) * 100 if cdi else None
-    st.write(f"SELIC: {selic:.4f}%")
-    st.write(f"CDI an.: {cdi_anual:.2f}%")
-    taxa_p = st.number_input("Poupança (%):", 4.5)
-    perc_c = st.number_input("CDB (% do CDI):", 100.0) if cdi_anual else None
-    perc_l = st.number_input("LCI (% do CDI):", 90.0) if cdi_anual else None
+    cdi_anual = ((1 + cdi/100)**252 - 1) * 100 if cdi else None
 
-    def ir(d): return 0.225 if d <= 180 else 0.20 if d <= 360 else 0.175 if d <= 720 else 0.15
+    st.markdown("### Taxas de referência")
+    st.write(f"SELIC diária: {selic:.4f}%")
+    st.write(f"CDI anual aprox.: {cdi_anual:.2f}%")
+
+    st.markdown("### Configuração de produtos")
+    taxa_poup = st.number_input("Poupança anual (%):", value=4.5)
+    perc_cdb = st.number_input("CDB (% do CDI):", min_value=0.0, value=100.0) if cdi_anual else None
+    perc_lci = st.number_input("LCI (% do CDI):", min_value=0.0, value=90.0) if cdi_anual else None
+    perc_lca = st.number_input("LCA (% do CDI):", min_value=0.0, value=90.0) if cdi_anual else None
+
+    def ir_rate(days: int) -> float:
+        if days <= 180:
+            return 0.225
+        elif days <= 360:
+            return 0.20
+        elif days <= 720:
+            return 0.175
+        else:
+            return 0.15
 
     if st.button("Calcular"):
-        inv = PV + A * n
-        prod = {"Poupança": taxa_p}
+        # Valor investido total
+        inv_total = PV + A * n
+        # Mapear cada produto em sua taxa anual
+        produtos = {
+            "Poupança": taxa_poup,
+        }
         if cdi_anual:
-            prod["CDB"] = cdi_anual * perc_c / 100
-            prod["LCI"] = cdi_anual * perc_l / 100
-            prod["LCA"] = cdi_anual * perc_l / 100
-        res = {k: calcular_valor_futuro(PV, A, n, t) for k, t in prod.items()}
-        df = pd.DataFrame(res, index=["Valor Futuro"]).T
-        df["Valor Investido"] = inv
-        df["Lucro Bruto"] = df["Valor Futuro"] - inv
-        d = n * 30
-        df["Imposto IR"] = [df.loc[k, "Lucro Bruto"] * ir(d) if k == "CDB" else 0 for k in df.index]
+            produtos["CDB"] = cdi_anual * perc_cdb / 100
+            produtos["LCI"] = cdi_anual * perc_lci / 100
+            produtos["LCA"] = cdi_anual * perc_lca / 100
+
+        # Calcular valor futuro
+        resultados = {k: calcular_valor_futuro(PV, A, n, taxa) for k, taxa in produtos.items()}
+        # Montar DataFrame
+        df = pd.DataFrame.from_dict(resultados, orient="index", columns=["Valor Futuro"])
+        df["Valor Investido"] = inv_total
+        df["Lucro Bruto"] = df["Valor Futuro"] - df["Valor Investido"]
+
+        # Imposto e lucro líquido
+        # converte meses em dias para IR
+        days = n * 30
+        impostos = []
+        for produto, bruto in df["Lucro Bruto"].items():
+            if produto == "CDB":
+                rate = ir_rate(days)
+                impostos.append(bruto * rate)
+            else:
+                impostos.append(0.0)
+        df["Imposto IR"] = impostos
         df["Lucro Líquido"] = df["Lucro Bruto"] - df["Imposto IR"]
+
+        # Formatar em reais
         fmt = lambda x: f"R$ {x:,.2f}"
-        df = df.map(fmt)
+        for col in ["Valor Futuro", "Valor Investido", "Lucro Bruto", "Imposto IR", "Lucro Líquido"]:
+            df[col] = df[col].map(fmt)
+
         st.table(df)
+
+        # Gráfico comparativo
         xs = np.arange(1, n + 1)
         fig, ax = plt.subplots()
-        for k in df.index:
-            ys = [calcular_valor_futuro(PV, A, m, prod[k]) for m in xs]
-            ax.plot(xs, ys, label=k)
+        for produto, taxa in produtos.items():
+            # mesma lógica de IR para a linha de Net: aqui só plotamos bruto
+            ys = [calcular_valor_futuro(PV, A, m, taxa) for m in xs]
+            ax.plot(xs, ys, label=produto)
+        ax.set(xlabel="Meses", ylabel="Valor (R$)")
         ax.legend()
         plt.tight_layout()
         st.pyplot(fig)
