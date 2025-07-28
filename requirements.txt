@@ -1,1 +1,8 @@
--e "streamlit\npandas\nnumpy\nmatplotlib\nrequests\nscikit-learn\dotenv\supabase"
+streamlit
+pandas
+numpy
+matplotlib
+requests
+scikit-learn
+python-dotenv
+supabase-py
